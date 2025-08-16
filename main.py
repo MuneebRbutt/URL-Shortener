@@ -1,58 +1,68 @@
 import hashlib
-import json
-import os
+import pyodbc
 
-DATA_FILE = "urls.json"
-
-# Load saved URL mappings
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r") as f:
-        url_map = json.load(f)
-else:
-    url_map = {}
+# Database connection
+conn = pyodbc.connect(
+    'DRIVER={ODBC Driver 18 for SQL Server};'
+    'SERVER=DESKTOP-TG92T85\MSSQLSERVER01;'  # change if your instance name is different
+    'DATABASE=Muneeb;'
+    'Trusted_Connection=yes;'
+    'TrustServerCertificate=yes;'
+)
+cursor = conn.cursor()
 
 BASE_URL = "http://Butt.url/"
 
 
-def shorten_url(long_url):
-    # Check if this URL was already shortened
-    for code, url in url_map.items():
-        if url == long_url:
-            return BASE_URL + code  # Return the existing short code
 
-    # Create a new short code using MD5 hash (first 6 characters)
+def shorten_url(long_url):
+    # Check if URL already exists
+    cursor.execute("SELECT short_url FROM UrlShortener WHERE long_url = ?", long_url)
+    row = cursor.fetchone()
+    if row:
+        return BASE_URL + row[0]
+
+    # Create short code
     short_code = hashlib.md5(long_url.encode()).hexdigest()[:6]
 
-    # Ensure no collision with another URL
-    while short_code in url_map and url_map[short_code] != long_url:
+    # Ensure no collision
+    while True:
+        cursor.execute("SELECT id FROM UrlShortener WHERE short_url = ?", short_code)
+        if not cursor.fetchone():
+            break
         short_code = hashlib.md5((long_url + os.urandom(4).hex()).encode()).hexdigest()[:6]
 
-    url_map[short_code] = long_url
-    save_data()
+    # Insert into DB
+    cursor.execute(
+        "INSERT INTO UrlShortener (long_url, short_url) VALUES (?, ?)",
+        (long_url, short_code)
+    )
+    conn.commit()
+
     return BASE_URL + short_code
 
 
 def expand_url(short_code):
-    return url_map.get(short_code, "No URL found for this code.")
-
-
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(url_map, f, indent=4)
+    cursor.execute("SELECT long_url FROM UrlShortener WHERE short_url = ?", short_code)
+    row = cursor.fetchone()
+    return row[0] if row else "No URL found for this code."
 
 
 def view_history():
-    if not url_map:
+    cursor.execute("SELECT long_url, short_url FROM UrlShortener")
+    rows = cursor.fetchall()
+    if not rows:
         print("No URLs have been shortened yet.")
     else:
         print("\n--- URL Shortening History ---")
-        for code, url in url_map.items():
-            print(f"{url}  -->  {BASE_URL}{code}")
+        for long_url, short_url in rows:
+            print(f"{long_url}  -->  {BASE_URL}{short_url}")
         print("\n")
 
 
-# Main Program
+
 if __name__ == "__main__":
+    import os
     while True:
         choice = input(
             "1: Shorten URL \n2: Expand URL \n3: View History \n4: Exit\nChoose: "
@@ -76,3 +86,6 @@ if __name__ == "__main__":
 
         else:
             print("Invalid choice, try again.")
+
+# Close DB connection when done
+conn.close()
